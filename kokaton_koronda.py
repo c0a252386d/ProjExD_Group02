@@ -1,4 +1,5 @@
 import os
+import math
 import random
 import sys
 import time
@@ -23,6 +24,117 @@ def check_bound(obj_rct: pg.Rect) -> tuple[bool, bool]:
     return yoko, tate
 
 
+def draw_heart_surface(size: int, color: tuple) -> pg.Surface:
+    """
+    数式を使ってハート形を描いたSurface
+    """
+    surf = pg.Surface((size, size), pg.SRCALPHA)
+    cx, cy = size // 2, size // 2
+    scale = size / 44
+
+    points = [
+        (
+            16 * math.sin(t / 100) ** 3 * scale + cx,
+            -(13 * math.cos(t / 100) - 5 * math.cos(2 * t / 100)
+              - 2 * math.cos(3 * t / 100) - math.cos(4 * t / 100)) * scale + cy
+        )
+        for t in range(0, 628)
+    ]
+    pg.draw.polygon(surf, color, points)
+    return surf
+
+
+class Life:
+    HEART_SIZE = 50
+
+    def __init__(self, num: int):
+        """
+        num：初期残機数
+        """
+        self.num = num
+        self._hearts: list[pg.Surface] = []
+        self._build_hearts()
+
+        # 割れエフェクト
+        self._kakera: list[dict] = []
+
+    def _build_hearts(self):
+        """残機数に応じた色でハートSurfaceを作り直す"""
+        self._hearts = []
+        for _ in range(self.num):
+            if self.num == 3:
+                color = (220, 30, 60)    # 赤
+            elif self.num == 2:
+                color = (255, 140, 0)    # オレンジ
+            else:
+                color = (255, 50, 50)    # 赤（点滅用）
+            self._hearts.append(draw_heart_surface(self.HEART_SIZE, color))
+
+    def decrease(self):
+        """残機を1減らして割れエフェクトを起動する"""
+        if self.num > 0:
+            self._spawn_kakera()   # 割れエフェクト生成
+            self.num -= 1
+            self._build_hearts()   # ハートを作り直す
+
+    def _spawn_kakera(self):
+        """割れるパーティクル"""
+        idx = self.num - 1
+        rx = WIDTH - 50 - idx * (self.HEART_SIZE + 8)
+        ry = HEIGHT - 50
+        self._kakera = []
+        for _ in range(18):
+            angle = random.uniform(0, 2 * math.pi)
+            speed = random.uniform(2, 6)
+            self._kakera.append({
+                "x": rx, "y": ry,
+                "vx": math.cos(angle) * speed,
+                "vy": math.sin(angle) * speed,
+                "life": random.randint(20, 40),  # 残り寿命
+                "color": (
+                    random.randint(180, 255),
+                    random.randint(0, 60),
+                    random.randint(0, 60),
+                ),
+                "size": random.randint(3, 8),
+            })
+
+    def update(self, dt: int):
+        """パーティクルを毎フレーム動かす"""
+        for p in self._kakera:
+            p["x"] += p["vx"]
+            p["y"] += p["vy"]
+            p["vy"] += 0.3
+            p["life"] -= 1
+
+        self._kakera = [p for p in self._kakera if p["life"] > 0]
+
+    def draw(self, screen: pg.Surface, now: int):
+        """
+        画面右下にハートを描画する
+        """
+        blink_visible = True
+        if self.num == 1 and (now // 250) % 2 == 0:
+            blink_visible = False
+
+        for i, heart in enumerate(self._hearts):
+            x = WIDTH - 50 - i * (self.HEART_SIZE + 8) - self.HEART_SIZE // 2
+            y = HEIGHT - 50 - self.HEART_SIZE // 2
+
+            if i == self.num - 1 and not blink_visible:
+                continue
+            screen.blit(heart, (x, y))
+
+        # 割れパーティクル
+        for p in self._kakera:
+            pg.draw.circle(
+                screen,
+                p["color"],
+                (int(p["x"]), int(p["y"])),
+                p["size"]
+            )
+
+
 class Player(pg.sprite.Sprite):
     """
     プレイヤーに関するクラス
@@ -40,19 +152,16 @@ class Player(pg.sprite.Sprite):
         self.image = pg.image.load("fig/alien1.png")
         self.rect = self.image.get_rect()
 
-        # スタート位置
-        self.rect.center = (50, HEIGHT//2)
+        self.rect.center = (50, HEIGHT // 2)
         self.speed = 1
         self.move_flag = False
 
-        # 足音
         self.walk_se = pg.mixer.Sound("sound/asioto.mp3")
 
     def update(self, key_lst: list[bool]):
         """
         プレイヤー更新
         """
-        
         sum_mv = [0, 0]
         for k, mv in __class__.delta.items():
             if key_lst[k]:
@@ -60,29 +169,22 @@ class Player(pg.sprite.Sprite):
                 sum_mv[1] += mv[1]
 
         self.rect.move_ip(
-            self.speed*sum_mv[0],
-            self.speed*sum_mv[1]
+            self.speed * sum_mv[0],
+            self.speed * sum_mv[1]
         )
 
-        # 画面外判定
         if check_bound(self.rect) != (True, True):
             self.rect.move_ip(
-                -self.speed*sum_mv[0],
-                -self.speed*sum_mv[1]
+                -self.speed * sum_mv[0],
+                -self.speed * sum_mv[1]
             )
 
-        # 移動判定
         if sum_mv != [0, 0]:
             self.move_flag = True
-
-            # 足音再生
             if not self.walk_se.get_num_channels():
                 self.walk_se.play(-1)
-
         else:
             self.move_flag = False
-            
-            # 足音停止
             self.walk_se.stop()
 
 
@@ -103,14 +205,11 @@ class Oni(pg.sprite.Sprite):
         self.image = self.image_back
         self.rect = self.image.get_rect()
 
-        # 開始時
-        self.rect.center = (WIDTH-50, HEIGHT//2)
+        self.rect.center = (WIDTH - 50, HEIGHT // 2)
         self.look_flag = False
 
-        # 次に振り向く時間
         self.next_turn = time.time() + random.uniform(5, 15)
 
-        # 音声
         self.voice = pg.mixer.Sound("sound/sound.mp3")
         self.voice.play(-1)
 
@@ -120,31 +219,17 @@ class Oni(pg.sprite.Sprite):
         """
         now = time.time()
 
-        # 後ろ向き中
         if not self.look_flag:
-
-            # ランダム時間経過で振り向く
             if now >= self.next_turn:
                 self.look_flag = True
                 self.image = self.image_front
-
-                # 音声停止
                 self.voice.stop()
-
-                # 3秒後に後ろ向きへ戻る
                 self.next_turn = now + 3
-
-        # 前向き中
         else:
-            # 3秒経過したら後ろ向き
             if now >= self.next_turn:
                 self.look_flag = False
                 self.image = self.image_back
-
-                # 音声再生
                 self.voice.play(-1)
-
-                # 次の振り向き
                 self.next_turn = now + random.uniform(5, 15)
 
 
@@ -158,7 +243,6 @@ def draw_text(
     """
     文字表示
     """
-
     font = pg.font.Font(None, size)
     txt = font.render(text, True, color)
     rect = txt.get_rect()
@@ -168,14 +252,14 @@ def draw_text(
 
 def gameover(screen: pg.Surface):
     fonto = pg.font.Font(None, 80)
-    txt = fonto.render("Game Over", True, (255,0,0))
-    screen.blit(txt,[WIDTH//2-150,HEIGHT//2])
-    
+    txt = fonto.render("Game Over", True, (255, 0, 0))
+    screen.blit(txt, [WIDTH // 2 - 150, HEIGHT // 2])
+
 
 def clear(screen: pg.Surface):
     fonto = pg.font.Font(None, 80)
-    txt = fonto.render("Clear!", True, (0,255,0))
-    screen.blit(txt,[WIDTH//2-150,HEIGHT//2])
+    txt = fonto.render("Clear!", True, (0, 255, 0))
+    screen.blit(txt, [WIDTH // 2 - 150, HEIGHT // 2])
 
 
 def main():
@@ -183,43 +267,53 @@ def main():
     screen = pg.display.set_mode((WIDTH, HEIGHT))
     clock = pg.time.Clock()
 
-    bg_img = pg.Surface((WIDTH, HEIGHT))
     bg_img = pg.image.load("fig/pg_bg.jpg")
     player = Player()
     oni = Oni()
+    life = Life(num=3)
+    muteki_time = 0
 
     while True:
+        dt = clock.tick(50)
+        now = pg.time.get_ticks()
         key_lst = pg.key.get_pressed()
 
         for event in pg.event.get():
             if event.type == pg.QUIT:
                 return
-            # リスタート
             if event.type == pg.KEYDOWN and event.key == pg.K_r:
                 return "restart"
 
         screen.blit(bg_img, [0, 0])
         player.update(key_lst)
         oni.update()
+        life.update(dt)
+
         screen.blit(player.image, player.rect)
         screen.blit(oni.image, oni.rect)
 
-        # ゲームオーバー
         if oni.look_flag and player.move_flag:
-            gameover(screen)
-            pg.display.update()
-            time.sleep(3)
-            return
+            if now >= muteki_time:
+                life.decrease()                # ライフを1減らす
+                muteki_time = now + 1500
 
-        # クリア
+                if life.num <= 0:              # ライフが0ならゲームオーバー
+                    life.draw(screen, now)
+                    gameover(screen)
+                    pg.display.update()
+                    time.sleep(3)
+                    return
+
         if player.rect.colliderect(oni.rect):
+            life.draw(screen, now)
             clear(screen)
             pg.display.update()
             time.sleep(3)
             return
 
+        life.draw(screen, now)
+
         pg.display.update()
-        clock.tick(50)
 
 
 if __name__ == "__main__":
